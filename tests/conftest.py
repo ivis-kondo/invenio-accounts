@@ -41,9 +41,9 @@ def _app_factory(config=None):
     app = Flask('testapp', instance_path=instance_path)
     app.config.update(
         ACCOUNTS_USE_CELERY=False,
-        CELERY_ALWAYS_EAGER=True,
+        task_always_eager=True,
         CELERY_CACHE_BACKEND="memory",
-        CELERY_EAGER_PROPAGATES_EXCEPTIONS=True,
+        task_eager_propagates=True,
         CELERY_RESULT_BACKEND="cache",
         LOGIN_DISABLED=False,
         MAIL_SUPPRESS_SEND=True,
@@ -51,11 +51,22 @@ def _app_factory(config=None):
         SECURITY_PASSWORD_SALT="CHANGE_ME_ALSO",
         SECURITY_CONFIRM_EMAIL_WITHIN="2 seconds",
         SECURITY_RESET_PASSWORD_WITHIN="2 seconds",
-        SQLALCHEMY_DATABASE_URI=os.environ.get(
-            'SQLALCHEMY_DATABASE_URI', 'sqlite:///test.db'),
+        DB_VERSIONING=False,
+        DB_VERSIONING_USER_MODEL=None,
+        SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        # SQLALCHEMY_DATABASE_URI=os.environ.get(
+        #     'SQLALCHEMY_DATABASE_URI', 'sqlite:///test.db'),
+        SQLALCHEMY_DATABASE_URI=os.getenv('SQLALCHEMY_DATABASE_URI',
+                                          'postgresql+psycopg2://invenio:dbpass123@postgresql:5432/wekotest'),
+        # SQLALCHEMY_DATABASE_URI=os.environ.get(
+        #     'SQLALCHEMY_DATABASE_URI', 'sqlite:///'+os.path.join(instance_path,'test.db')),
+        # SQLALCHEMY_DATABASE_URI=os.environ.get(
+        #     'SQLALCHEMY_DATABASE_URI', 'sqlite:///:memory:'),
         SERVER_NAME='example.com',
         TESTING=True,
         WTF_CSRF_ENABLED=False,
+        ACCOUNTS_JWT_ALOGORITHM = 'HS256',
+        ACCOUNTS_JWT_SECRET_KEY = None
     )
 
     # Set key value session store to use Redis when running on TravisCI.
@@ -182,14 +193,21 @@ def app_i18n(app):
 @pytest.fixture()
 def users(app):
     """Create users."""
-    user1 = create_test_user(email='info@inveniosoftware.org',
-                             password='tester')
-    user2 = create_test_user(email='info2@inveniosoftware.org',
-                             password='tester2')
+    with app.app_context():
+        user1 = create_test_user(email='info@inveniosoftware.org',
+                                 password='tester')
+        user1_email = user1.email
+        user1_id = user1.id
+        user1_pw = user1.password_plaintext
+        user2 = create_test_user(email='info2@inveniosoftware.org',
+                                 password='tester2')
+        user2_email = user2.email
+        user2_id = user2.id
+        user2_pw = user2.password_plaintext
 
     return [
-        {'email': user1.email, 'id': user1.id,
-         'password': user1.password_plaintext, 'obj': user1},
-        {'email': user2.email, 'id': user2.id,
-         'password': user2.password_plaintext, 'obj': user2},
+        {'email': user1_email, 'id': user1_id,
+         'password': user1_pw, 'obj': user1},
+        {'email': user2_email, 'id': user2_id,
+         'password': user2_pw, 'obj': user2},
     ]

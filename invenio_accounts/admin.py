@@ -8,6 +8,8 @@
 
 """Admin views for invenio-accounts."""
 
+import os
+
 from flask import current_app, flash
 from flask_admin.actions import action
 from flask_admin.babel import lazy_gettext
@@ -16,6 +18,7 @@ from flask_admin.contrib.sqla.ajax import QueryAjaxModelLoader
 from flask_admin.form.fields import DateTimeField
 from flask_admin.model.fields import AjaxSelectMultipleField
 from flask_babelex import gettext as _
+from flask_security import current_user
 from flask_security.recoverable import send_reset_password_instructions
 from flask_security.utils import hash_password
 from invenio_db import db
@@ -23,6 +26,8 @@ from passlib import pwd
 from werkzeug.local import LocalProxy
 from wtforms.fields import BooleanField
 from wtforms.validators import DataRequired
+
+from weko_workflow.models import WorkFlow, WorkflowRole
 
 from .cli import commit
 from .models import Role, SessionActivity, User
@@ -35,7 +40,6 @@ class UserView(ModelView):
     """Flask-Admin view to manage users."""
 
     can_view_details = True
-    can_delete = False
 
     list_all = (
         'id', 'email', 'active', 'confirmed_at', 'last_login_at',
@@ -132,6 +136,24 @@ class UserView(ModelView):
             current_app.logger.exception(str(exc))  # pragma: no cover
             flash(_('Failed to activate users.'), 'error')  # pragma: no cover
 
+    _system_role = os.environ.get('INVENIO_ROLE_SYSTEM',
+                                  'System Administrator')
+
+    @property
+    def can_create(self):
+        """Check permission for creating."""
+        return self._system_role in [role.name for role in current_user.roles]
+
+    @property
+    def can_edit(self):
+        """Check permission for Editing."""
+        return self._system_role in [role.name for role in current_user.roles]
+
+    @property
+    def can_delete(self):
+        """Check permission for Deleting."""
+        return self._system_role in [role.name for role in current_user.roles]
+
 
 class RoleView(ModelView):
     """Admin view for roles."""
@@ -165,6 +187,29 @@ class RoleView(ModelView):
         'user': user_loader
     }
 
+    def after_model_change(self, form, model, is_created):
+        if is_created and current_app.config.get('ACCOUNTS_WORKFLOW_ROLE_HIDE_FILTER', False):
+            try:
+                workflows = WorkFlow.query.filter_by(
+                    is_deleted=False).all()
+                if workflows:
+                    id_list = [x.id for x in workflows]
+                    with db.session.begin_nested():
+                        for i in id_list:
+                            wfrole = dict(
+                                workflow_id=i,
+                                role_id=model.id
+                            )
+                            db.session.execute(WorkflowRole.__table__.insert(), wfrole)
+                    db.session.commit()
+            except Exception as ex:
+                current_app.logger.error(
+                    'Insert workflow_id_list: {}, role_id: {} into workflow_userrole fail.'
+                    .format(id_list, model.id)
+                )
+                current_app.logger.error(str(ex))
+                db.session.rollback()
+
 
 class SessionActivityView(ModelView):
     """Admin view for user sessions."""
@@ -192,23 +237,31 @@ class SessionActivityView(ModelView):
 
     def delete_model(self, model):
         """Delete a specific session."""
-        if SessionActivity.is_current(sid_s=model.sid_s):
-            flash('You could not remove your current session', 'error')
-            return
-        delete_session(sid_s=model.sid_s)
-        db.session.commit()
+        try:
+            if SessionActivity.is_current(sid_s=model.sid_s):
+                flash('You could not remove your current session', 'error')
+                return
+            delete_session(sid_s=model.sid_s)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(e)
 
     @action('delete', lazy_gettext('Delete selected sessions'),
             lazy_gettext('Are you sure you want to delete selected sessions?'))
     def action_delete(self, ids):
         """Delete selected sessions."""
-        is_current = any(SessionActivity.is_current(sid_s=id_) for id_ in ids)
-        if is_current:
-            flash('You could not remove your current session', 'error')
-            return
-        for id_ in ids:
-            delete_session(sid_s=id_)
-        db.session.commit()
+        try:
+            is_current = any(SessionActivity.is_current(sid_s=id_) for id_ in ids)
+            if is_current:
+                flash('You could not remove your current session', 'error')
+                return
+            for id_ in ids:
+                delete_session(sid_s=id_)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(e)
 
 
 session_adminview = {
